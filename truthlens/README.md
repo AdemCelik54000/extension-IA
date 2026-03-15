@@ -1,6 +1,8 @@
 # TruthLens
 
-Une extension de navigateur qui vérifie les informations sur les pages web en utilisant Mistral AI et Brave Search.
+TruthLens est une extension de navigateur qui aide à vérifier rapidement une information visible sur une page web.
+Elle peut analyser soit le contenu principal d'une page, soit un texte sélectionné par l'utilisateur.
+Le backend utilise Mistral pour raisonner sur l'affirmation et Brave Search pour chercher des sources fiables.
 
 ## Configuration locale
 
