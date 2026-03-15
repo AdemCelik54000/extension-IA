@@ -6,7 +6,7 @@
   const statusDiv = document.getElementById('status');
   const resultsDiv = document.getElementById('results');
   const CACHE_TTL_MS = 1000 * 60 * 60 * 6;
-  const CACHE_VERSION = 'v5';
+  const CACHE_VERSION = 'v6';
 
   restoreAnalysisMode();
 
@@ -430,6 +430,54 @@ function extractPagePayload(analysisMode) {
     return uniqueTexts(nodes.map((node) => getNodeText(node)), minLength, maxItems);
   }
 
+  function getCurrentStatusPath() {
+    const match = window.location.pathname.match(/\/[^/]+\/status\/\d+/i);
+    return match ? match[0].toLowerCase() : '';
+  }
+
+  function chooseSocialRoot(candidateRoots, config) {
+    if (config.sourceLabel !== 'post X/Twitter') {
+      return candidateRoots[0] || null;
+    }
+
+    const currentStatusPath = getCurrentStatusPath();
+    if (!currentStatusPath) {
+      return candidateRoots[0] || null;
+    }
+
+    const exactMatch = candidateRoots.find((root) => {
+      const timeLink = root.querySelector(`a[href*="${currentStatusPath}"] time`);
+      return Boolean(timeLink);
+    });
+
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    const articleMatch = candidateRoots.find((root) => {
+      const statusLink = root.querySelector(`a[href*="${currentStatusPath}"]`);
+      return Boolean(statusLink);
+    });
+
+    return articleMatch || candidateRoots[0] || null;
+  }
+
+  function collectMainPostTexts(root, config) {
+    if (config.sourceLabel !== 'post X/Twitter') {
+      return collectTexts(root, config.textSelectors, 12, 12);
+    }
+
+    const tweetTextNodes = Array.from(root.querySelectorAll('[data-testid="tweetText"]'));
+    const preferredTexts = uniqueTexts(tweetTextNodes.map((node) => getNodeText(node)), 12, 1);
+    if (preferredTexts.length) {
+      return preferredTexts;
+    }
+
+    const fallbackNodes = Array.from(root.querySelectorAll('div[lang], span[lang]'))
+      .filter((node) => !node.closest('[data-testid="card.wrapper"]'));
+    return uniqueTexts(fallbackNodes.map((node) => getNodeText(node)), 12, 1);
+  }
+
   function stripNoise(element) {
     const clone = element.cloneNode(true);
     clone.querySelectorAll([
@@ -517,12 +565,12 @@ function extractPagePayload(analysisMode) {
       }))
       .sort((left, right) => (right.postLength + right.textLength) - (left.postLength + left.textLength));
 
-    const chosenRoot = rankedRoots[0]?.root;
+    const chosenRoot = chooseSocialRoot(rankedRoots.map((entry) => entry.root), config);
     if (!chosenRoot) {
       return null;
     }
 
-    const textBlocks = collectTexts(chosenRoot, config.textSelectors, 12, 12);
+    const textBlocks = collectMainPostTexts(chosenRoot, config);
     const authorText = uniqueTexts(
       config.authorSelectors.flatMap((selector) => Array.from(chosenRoot.querySelectorAll(selector)).map((node) => getNodeText(node))),
       2,
@@ -537,11 +585,8 @@ function extractPagePayload(analysisMode) {
     const metadataFallback = metaContent('meta[property="og:description"]') || metaContent('meta[name="description"]');
 
     const content = normalizeText([
-      authorText,
-      timeText,
       ...textBlocks,
-      ...imageAlt,
-      metadataFallback
+      ...imageAlt
     ].filter(Boolean).join('\n'));
 
     if (content.length < 24) {
@@ -550,10 +595,10 @@ function extractPagePayload(analysisMode) {
 
     return {
       title: normalizeText(metaContent('meta[property="og:title"]') || document.title || authorText || config.sourceLabel),
-      description: normalizeText(metadataFallback || textBlocks[0] || content),
-      headings: authorText ? [authorText] : [],
+      description: normalizeText(textBlocks[0] || content || metadataFallback),
+      headings: [authorText, timeText].filter(Boolean),
       content,
-      selectedSource: config.sourceLabel,
+      selectedSource: config.sourceLabel === 'post X/Twitter' ? 'post principal X/Twitter' : config.sourceLabel,
       url: window.location.href
     };
   }

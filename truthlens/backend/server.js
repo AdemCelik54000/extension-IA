@@ -8,7 +8,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const localAnalysisCache = new Map();
 const LOCAL_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
-const ANALYSIS_CACHE_VERSION = 'v9';
+const ANALYSIS_CACHE_VERSION = 'v10';
 
 app.use(cors());
 app.use(express.json());
@@ -23,6 +23,17 @@ const TRUSTED_SITE_DOMAINS = [
   'leparisien.fr',
   'france24.com',
   'bfmtv.com',
+  'tf1info.fr',
+  'franceinfo.fr',
+  '20minutes.fr',
+  'ouest-france.fr',
+  'laprovence.com',
+  'lanouvellerepublique.fr',
+  'ledauphine.com',
+  'actu.fr',
+  'reuters.com',
+  'apnews.com',
+  'afp.com',
   'lesechos.fr',
   'mediapart.fr',
   'la-croix.com',
@@ -34,12 +45,45 @@ const TRUSTED_SITE_DOMAINS = [
   'economie.gouv.fr',
   'diplomatie.gouv.fr',
   'nasa.gov',
-  'britannica.com',
-  'wikipedia.org',
-  'nationalgeographic.com',
   'cnrs.fr',
   'futura-sciences.com',
   'science.org'
+];
+
+const HIGH_PRIORITY_NEWS_DOMAINS = [
+  'lemonde.fr',
+  'lefigaro.fr',
+  'liberation.fr',
+  'francetvinfo.fr',
+  'franceinfo.fr',
+  'leparisien.fr',
+  'france24.com',
+  'bfmtv.com',
+  'tf1info.fr',
+  '20minutes.fr',
+  'ouest-france.fr',
+  'reuters.com',
+  'apnews.com',
+  'afp.com',
+  'rfi.fr'
+];
+
+const SUPPORTING_REFERENCE_DOMAINS = [
+  'gouvernement.fr',
+  'service-public.fr',
+  'data.gouv.fr',
+  'economie.gouv.fr',
+  'diplomatie.gouv.fr',
+  'nasa.gov',
+  'cnrs.fr',
+  'futura-sciences.com',
+  'science.org',
+  '.gouv.fr',
+  '.gov',
+  '.edu',
+  'who.int',
+  'europa.eu',
+  'un.org'
 ];
 
 const SOURCE_MENTION_DOMAIN_MAP = {
@@ -50,11 +94,16 @@ const SOURCE_MENTION_DOMAIN_MAP = {
   '@libe': 'liberation.fr',
   '@franceinfo': 'francetvinfo.fr',
   '@bfmtv': 'bfmtv.com',
+  '@tf1info': 'tf1info.fr',
   '@france24_fr': 'france24.com',
+  '@franceinfo': 'franceinfo.fr',
   '@lesechos': 'lesechos.fr',
   '@mediapart': 'mediapart.fr',
   '@rfi': 'rfi.fr',
-  '@europe1': 'europe1.fr'
+  '@europe1': 'europe1.fr',
+  '@reuters': 'reuters.com',
+  '@ap': 'apnews.com',
+  '@afpfr': 'afp.com'
 };
 
 function getResponseText(resp) {
@@ -449,7 +498,20 @@ function isTimeSensitiveClaim(claim) {
     'resultat de',
     'dernieres nouvelles',
     'actualite',
-    'actualité'
+    'actualité',
+    'a annonce',
+    'a déclaré',
+    'vient de',
+    'aurait',
+    'explosion',
+    'attaque',
+    'bombe',
+    'frappe',
+    'arrestation',
+    'alerte',
+    'attaque nucleaire',
+    'attaque atomique',
+    'missile'
   ].some((marker) => normalized.includes(normalizeForMatch(marker)));
 }
 
@@ -618,14 +680,28 @@ function composeSearchQueries(claim, pageContext) {
   const description = cleanText(pageContext?.description);
   const contextTerms = extractSearchTerms(`${title} ${description}`).slice(0, 4).join(' ');
   const mentionedDomains = extractMentionedSourceDomains(pageContext);
+  const isFreshClaim = isTimeSensitiveClaim(baseClaim);
 
   const queries = [
     baseClaim,
     `"${baseClaim}"`,
     contextTerms ? `${baseClaim} ${contextTerms}` : '',
+    isFreshClaim ? `${baseClaim} actualite` : '',
+    isFreshClaim ? `${baseClaim} dernieres nouvelles` : '',
+    isFreshClaim ? `${baseClaim} direct` : '',
+    isFreshClaim ? `${baseClaim} confirmation media fiable` : '',
     isSocialSnapshot(pageContext) ? `${baseClaim} actualite` : '',
     isSocialSnapshot(pageContext) ? `${baseClaim} rennes losc srfc` : ''
   ];
+
+  if (isFreshClaim) {
+    HIGH_PRIORITY_NEWS_DOMAINS.slice(0, 8).forEach((domain) => {
+      queries.push(`${baseClaim} site:${domain}`);
+      if (contextTerms) {
+        queries.push(`${baseClaim} ${contextTerms} site:${domain}`);
+      }
+    });
+  }
 
   mentionedDomains.forEach((domain) => {
     queries.push(`${baseClaim} site:${domain}`);
@@ -687,16 +763,26 @@ async function checkBraveSearch(query, analysisMode) {
       snippet: cleanSnippet(item.description || item.snippet || '')
     }))
     .filter((item) => item.url && scoreSource(item.url) > 0)
-    .sort((left, right) => scoreSource(right.url) - scoreSource(left.url))
-    .slice(0, analysisMode === 'deep' ? 5 : 3);
+    .sort((left, right) => scoreSearchResult(right, query) - scoreSearchResult(left, query))
+    .slice(0, analysisMode === 'deep' ? 6 : 4);
 }
 
 function scoreSource(url) {
   const normalizedUrl = String(url || '').toLowerCase();
   if (!normalizedUrl) return 0;
-  const extraTrustedDomains = ['.gouv.fr', '.gov', '.edu', 'who.int', 'europa.eu', 'un.org'];
-  const trustedDomains = [...TRUSTED_SITE_DOMAINS, ...extraTrustedDomains];
-  return trustedDomains.some((domain) => normalizedUrl.includes(domain)) ? 1 : 0;
+  if (HIGH_PRIORITY_NEWS_DOMAINS.some((domain) => normalizedUrl.includes(domain))) return 4;
+  if (TRUSTED_SITE_DOMAINS.some((domain) => normalizedUrl.includes(domain))) return 2;
+  if (SUPPORTING_REFERENCE_DOMAINS.some((domain) => normalizedUrl.includes(domain))) return 1;
+  return 0;
+}
+
+function scoreSearchResult(result, query) {
+  const domainScore = scoreSource(result?.url || '');
+  const combinedText = normalizeForMatch(`${result?.title || ''} ${result?.snippet || ''}`);
+  const queryTerms = extractSignificantTerms(query).filter((term) => term.length >= 4);
+  const overlap = queryTerms.reduce((count, term) => count + (combinedText.includes(term) ? 1 : 0), 0);
+  const recencyBonus = /\b(heure|heures|minute|min|direct|aujourdhui|aujourd hui|ce soir|ce matin|hier|2026|2025)\b/.test(combinedText) ? 2 : 0;
+  return domainScore * 10 + overlap * 2 + recencyBonus;
 }
 
 async function assessClaimsWithMistral(bundles, pageUrl, pageContext, analysisMode) {
@@ -723,11 +809,13 @@ async function assessClaimsWithMistral(bundles, pageUrl, pageContext, analysisMo
     `   - explanation : courte explication en français\n` +
     `   - sources : tableau d'objets {title, url, snippet}\n\n` +
     `Règles pour les verdicts :\n` +
-    `- Si au moins une source fiable externe confirme clairement l'affirmation, verdict = "true".\n` +
-    `- Si au moins une source fiable externe contredit clairement l'affirmation, verdict = "false".\n` +
+    `- Pour une affirmation d'actualité, donnez la priorité aux médias d'information fiables et récents avant toute connaissance générale.\n` +
+    `- Si plusieurs sources d'actualité fiables concordent clairement, verdict = "true" avec un score élevé, pas "uncertain".\n` +
+    `- Si plusieurs sources d'actualité fiables contredisent clairement, verdict = "false" avec un score élevé.\n` +
+    `- Si une source encyclopédique ou générale contredit l'actualité récente, privilégiez l'actualité récente.\n` +
     `- Si aucune source externe n'est disponible, utilisez vos connaissances générales vérifiables pour juger.\n` +
     `- Si les sources et vos connaissances ne suffisent pas, verdict = "uncertain".\n` +
-    `- Ne laissez jamais un verdict flou si l'information est connue.\n\n` +
+    `- Ne laissez jamais un verdict flou si l'information est largement couverte par des sources fiables.\n\n` +
     `Sources externes :\n` +
     `- Brave Search est la source principale utilisée ici.\n` +
     `- Google FactCheck peut être présent et doit être priorisé s'il apparaît parmi les sources.\n\n` +
@@ -824,11 +912,13 @@ async function compareSelectionWithSources(claim, sources, analysisMode) {
     : '- Aucune source externe exploitable trouvée.';
 
   const prompt = `Jugez l'affirmation uniquement avec les sources ci-dessous.\n` +
+    `Pour une affirmation d'actualité, privilégiez clairement les médias d'information fiables et récents.\n` +
     `Ignorez les sources hors sujet.\n` +
     `Choisissez "true" si une source pertinente confirme clairement l'affirmation.\n` +
     `Choisissez "false" si une source pertinente la contredit clairement.\n` +
-    `Choisissez "uncertain" seulement si les sources pertinentes sont réellement insuffisantes ou ambiguës.\n` +
+    `Choisissez "uncertain" seulement si les sources pertinentes sont réellement insuffisantes ou ambiguës, pas par prudence automatique.\n` +
     `Préférez "true" ou "false" quand une conclusion nette est possible.\n` +
+    `Si plusieurs médias fiables convergent, mettez un score élevé.\n` +
     `Explication courte, 25 mots maximum.\n` +
     `Répondez strictement avec un JSON valide: {"claim":"...","verdict":"true|false|uncertain","credibility_score":0.0,"explanation":"...","sources":[]}.\n\n` +
     `Affirmation: "${claim}"\n\n` +
@@ -885,30 +975,54 @@ function buildStrongSourceHeuristic(claim, sources) {
       const normalizedSource = normalizeForMatch(combinedText);
       const matchedTerms = claimTerms.filter((term) => normalizedSource.includes(term));
       const overlap = matchedTerms.length / claimTerms.length;
-      const contradiction = /\b(faux|fake|rumeur|dement|dementi|aucun|aucune|pas de|inexact)\b/.test(normalizedSource);
+      const contradiction = /\b(faux|fake|rumeur|dement|dementi|aucun|aucune|pas de|inexact|intox|non verifie)\b/.test(normalizedSource);
+      const domainWeight = scoreSource(source.url || '');
       return {
         source,
         overlap,
         matchedTerms,
-        contradiction
+        contradiction,
+        domainWeight
       };
     })
-    .sort((left, right) => right.overlap - left.overlap);
+    .sort((left, right) => ((right.overlap * 10) + right.domainWeight) - ((left.overlap * 10) + left.domainWeight));
 
   const best = ranked[0];
   if (!best || best.contradiction) {
     return null;
   }
 
+  const corroboratingSources = ranked.filter((item) => !item.contradiction && item.overlap >= 0.5);
+  const strongNewsCorroboration = corroboratingSources.filter((item) => item.domainWeight >= 4).length;
+  const strongReferenceCorroboration = corroboratingSources.filter((item) => item.domainWeight >= 2).length;
   const hasEnoughOverlap = best.overlap >= 0.72 || best.matchedTerms.length >= 5;
-  if (!hasEnoughOverlap) {
+  const hasEnoughCorroboration = strongNewsCorroboration >= 2 || strongReferenceCorroboration >= 3;
+
+  if (!hasEnoughOverlap && !hasEnoughCorroboration) {
     return null;
   }
 
+  const contradictionCount = ranked.filter((item) => item.contradiction && item.overlap >= 0.45).length;
+  if (contradictionCount >= 2 && contradictionCount >= corroboratingSources.length) {
+    return {
+      verdict: 'false',
+      credibility_score: 0.9,
+      explanation: 'Plusieurs sources fiables indiquent que l’affirmation est fausse ou démentie.'
+    };
+  }
+
+  const confidence = strongNewsCorroboration >= 2
+    ? 0.98
+    : hasEnoughCorroboration
+      ? 0.93
+      : Math.min(0.9, Math.max(0.8, best.overlap));
+
   return {
     verdict: 'true',
-    credibility_score: Math.min(0.92, Math.max(0.78, best.overlap)),
-    explanation: `Une source fiable concorde clairement avec l'affirmation, notamment ${best.source.title || 'la source principale'}.`
+    credibility_score: confidence,
+    explanation: strongNewsCorroboration >= 2
+      ? 'Plusieurs médias fiables d’actualité confirment clairement cette affirmation.'
+      : `Une source fiable concorde clairement avec l'affirmation, notamment ${best.source.title || 'la source principale'}.`
   };
 }
 

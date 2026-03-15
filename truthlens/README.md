@@ -3,6 +3,7 @@
 TruthLens est une extension de navigateur qui aide à vérifier rapidement une information visible sur une page web.
 Elle peut analyser soit le contenu principal d'une page, soit un texte sélectionné par l'utilisateur.
 Le backend utilise Mistral pour raisonner sur l'affirmation et Brave Search pour chercher des sources fiables.
+Pour les annonces et faits d'actualité, la vérification privilégie d'abord les médias fiables et récents avant les sources générales ou encyclopédiques.
 
 ## Configuration locale
 
