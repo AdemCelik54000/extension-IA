@@ -8,7 +8,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const localAnalysisCache = new Map();
 const LOCAL_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
-const ANALYSIS_CACHE_VERSION = 'v8';
+const ANALYSIS_CACHE_VERSION = 'v9';
 
 app.use(cors());
 app.use(express.json());
@@ -41,6 +41,21 @@ const TRUSTED_SITE_DOMAINS = [
   'futura-sciences.com',
   'science.org'
 ];
+
+const SOURCE_MENTION_DOMAIN_MAP = {
+  '@leparisiensport': 'leparisien.fr',
+  '@leparisien': 'leparisien.fr',
+  '@lemondefr': 'lemonde.fr',
+  '@le_figaro': 'lefigaro.fr',
+  '@libe': 'liberation.fr',
+  '@franceinfo': 'francetvinfo.fr',
+  '@bfmtv': 'bfmtv.com',
+  '@france24_fr': 'france24.com',
+  '@lesechos': 'lesechos.fr',
+  '@mediapart': 'mediapart.fr',
+  '@rfi': 'rfi.fr',
+  '@europe1': 'europe1.fr'
+};
 
 function getResponseText(resp) {
   if (!resp || !resp.choices || !resp.choices[0]) return '';
@@ -130,6 +145,18 @@ app.post('/verify', async (req, res) => {
     const reducedPage = reducePagePayload(page || { content: text || '' }, normalizedMode);
     const claims = await extractClaimsFromPage(reducedPage, normalizedMode);
     if (claims.length === 0) {
+      const fallbackClaims = buildFallbackClaimsFromPage(reducedPage, normalizedMode);
+      if (fallbackClaims.length > 0) {
+        const results = await verifyClaimsBatch(fallbackClaims, url, reducedPage, normalizedMode);
+        const payload = {
+          results,
+          debug: buildDebugPayload(reducedPage, fallbackClaims, results, normalizedMode, { hit: false, layer: 'aucun' })
+        };
+        await setCachedAnalysis(cacheKey, payload);
+        res.json(payload);
+        return;
+      }
+
       const fallbackResult = {
         claim: reducedPage?.title || 'Page analysée',
         verdict: 'uncertain',
@@ -187,6 +214,95 @@ async function extractClaimsFromPage(page, analysisMode) {
     console.error('Failed to parse claims:', content);
     return [];
   }
+}
+
+function buildFallbackClaimsFromPage(page, analysisMode) {
+  const maxClaims = analysisMode === 'deep' ? 4 : 2;
+  const candidates = [
+    ...splitIntoClaimCandidates(page?.content),
+    ...splitIntoClaimCandidates(page?.description),
+    ...splitIntoClaimCandidates(page?.title)
+  ];
+
+  if (isSocialSnapshot(page)) {
+    const withSocialPreference = candidates
+      .filter((candidate) => looksLikeClaim(candidate))
+      .sort((left, right) => scoreFallbackClaim(right) - scoreFallbackClaim(left));
+    return dedupeClaims(withSocialPreference).slice(0, maxClaims);
+  }
+
+  return dedupeClaims(candidates.filter((candidate) => looksLikeClaim(candidate))).slice(0, maxClaims);
+}
+
+function splitIntoClaimCandidates(value) {
+  const text = sanitizeClaimCandidate(cleanText(value)
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+#\S+/g, ' ')
+    .replace(/\s+https?:\/\/\S+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim());
+
+  if (!text) {
+    return [];
+  }
+
+  const rawParts = text
+    .split(/(?<=[\.!?])\s+|\s+[;:]-?\s+/)
+    .map((part) => sanitizeClaimCandidate(cleanText(part)));
+
+  if (rawParts.length <= 1) {
+    return [text];
+  }
+
+  return rawParts;
+}
+
+function sanitizeClaimCandidate(value) {
+  return cleanText(String(value || '')
+    .replace(/^\(\d+\)\s*/, '')
+    .replace(/^[^:]{0,80}\bon x\s*:\s*/i, '')
+    .replace(/^[^:]{0,80}\bsur x\s*:\s*/i, '')
+    .replace(/^actu\s+[a-z0-9_\-]+\s*/i, '')
+    .replace(/\s+#\S+/g, ' ')
+  );
+}
+
+function looksLikeClaim(value) {
+  const normalized = normalizeForMatch(value);
+  if (!normalized || normalized.length < 25) return false;
+  if (normalized.startsWith('actu ') || normalized === 'x' || normalized === 'twitter') return false;
+  if (normalized.includes('connectez vous') || normalized.includes('inscrivez vous')) return false;
+
+  const factSignals = [
+    'aurait', 'selon', 'personnes', 'blesse', 'blesses', 'mort', 'morts', 'dispersees', 'disperses',
+    'hier', 'soir', 'rennes', 'paris', 'marseille', 'bagarre', 'attaque', 'incendie', 'accident',
+    'police', 'forces de lordre', 'gouvernement', 'annonce', 'confirme', 'declare', 'revele'
+  ];
+  return factSignals.some((signal) => normalized.includes(signal)) || /\d/.test(normalized);
+}
+
+function scoreFallbackClaim(value) {
+  const normalized = normalizeForMatch(value);
+  let score = normalized.length;
+  if (/\d/.test(normalized)) score += 30;
+  if (normalized.includes('selon')) score += 20;
+  if (normalized.includes('aurait')) score += 15;
+  if (normalized.includes('blesse') || normalized.includes('morts')) score += 20;
+  if (normalized.includes('bagarre') || normalized.includes('attaque') || normalized.includes('incident')) score += 20;
+  return score;
+}
+
+function isSocialSnapshot(page) {
+  const selectedSource = cleanText(page?.selectedSource).toLowerCase();
+  return selectedSource.includes('x/twitter')
+    || selectedSource.includes('linkedin')
+    || selectedSource.includes('reddit')
+    || selectedSource.includes('facebook')
+    || selectedSource.includes('instagram')
+    || selectedSource.includes('threads')
+    || selectedSource.includes('tiktok')
+    || selectedSource.includes('bluesky');
 }
 
 function dedupeClaims(claims) {
@@ -348,13 +464,20 @@ function chooseSelectionVerdict({ needsFreshSources, knowledgeVerdict, sourceVer
 
 async function verifyClaimsBatch(claims, pageUrl, pageContext, analysisMode) {
   const bundles = await Promise.all(claims.map(async (claim) => {
-    try {
-      const sources = await checkBraveSearch(composeSearchQuery(claim, pageContext), analysisMode);
-      return { claim, sources };
-    } catch (error) {
-      console.error('Brave Search error:', error?.message || error);
-      return { claim, sources: [] };
+    const sources = [];
+    for (const query of composeSearchQueries(claim, pageContext)) {
+      try {
+        const braveSources = await checkBraveSearch(query, analysisMode);
+        sources.push(...braveSources);
+        if (dedupeSources(sources).length >= (analysisMode === 'deep' ? 5 : 3)) {
+          break;
+        }
+      } catch (error) {
+        console.error('Brave Search error:', error?.message || error);
+      }
     }
+
+    return { claim, sources: filterRelevantSources(claim, dedupeSources(sources)) };
   }));
 
   return assessClaimsWithMistral(bundles, pageUrl, pageContext, analysisMode);
@@ -474,9 +597,50 @@ async function checkGoogleFactCheck(claim) {
   }
 }
 
-function composeSearchQuery(claim, pageContext) {
+function composeSearchQueries(claim, pageContext) {
+  const baseClaim = cleanText(claim);
   const title = cleanText(pageContext?.title);
-  return title ? `${claim} ${title}` : claim;
+  const description = cleanText(pageContext?.description);
+  const contextTerms = extractSearchTerms(`${title} ${description}`).slice(0, 4).join(' ');
+  const mentionedDomains = extractMentionedSourceDomains(pageContext);
+
+  const queries = [
+    baseClaim,
+    `"${baseClaim}"`,
+    contextTerms ? `${baseClaim} ${contextTerms}` : '',
+    isSocialSnapshot(pageContext) ? `${baseClaim} actualite` : '',
+    isSocialSnapshot(pageContext) ? `${baseClaim} rennes losc srfc` : ''
+  ];
+
+  mentionedDomains.forEach((domain) => {
+    queries.push(`${baseClaim} site:${domain}`);
+    if (contextTerms) {
+      queries.push(`${baseClaim} ${contextTerms} site:${domain}`);
+    }
+  });
+
+  return Array.from(new Set(queries.map((query) => cleanText(query)).filter(Boolean)));
+}
+
+function extractMentionedSourceDomains(pageContext) {
+  const haystack = normalizeForMatch([
+    pageContext?.title,
+    pageContext?.description,
+    pageContext?.content,
+    ...(Array.isArray(pageContext?.headings) ? pageContext.headings : [])
+  ].filter(Boolean).join(' '));
+
+  return Object.entries(SOURCE_MENTION_DOMAIN_MAP)
+    .filter(([mention]) => haystack.includes(normalizeForMatch(mention)))
+    .map(([, domain]) => domain);
+}
+
+function extractSearchTerms(value) {
+  return Array.from(new Set(
+    normalizeForMatch(value)
+      .split(/[^a-z0-9]+/)
+      .filter((term) => term.length >= 4 && !SELECTION_SOURCE_STOPWORDS.has(term))
+  ));
 }
 
 async function checkBraveSearch(query, analysisMode) {
@@ -587,12 +751,24 @@ async function assessClaimsWithMistral(bundles, pageUrl, pageContext, analysisMo
     });
   } catch (error) {
     console.error('Failed to parse Mistral verdict:', output);
-    return bundles.map((bundle) => ({
-      claim: bundle.claim,
-      verdict: 'uncertain',
-      credibility_score: 0.5,
-      explanation: 'Impossible d\'interpréter correctement la réponse du modèle.',
-      sources: bundle.sources
+    return Promise.all(bundles.map(async (bundle) => {
+      const sourceVerdict = await compareSelectionWithSources(bundle.claim, bundle.sources, analysisMode);
+      const knowledgeVerdict = isTimeSensitiveClaim(bundle.claim)
+        ? null
+        : await compareSelectionWithGeneralKnowledge(bundle.claim, analysisMode);
+      const fallbackVerdict = chooseSelectionVerdict({
+        needsFreshSources: isTimeSensitiveClaim(bundle.claim),
+        knowledgeVerdict,
+        sourceVerdict
+      });
+
+      return {
+        claim: bundle.claim,
+        verdict: fallbackVerdict.verdict || 'uncertain',
+        credibility_score: typeof fallbackVerdict.credibility_score === 'number' ? fallbackVerdict.credibility_score : 0.5,
+        explanation: fallbackVerdict.explanation || 'Impossible d\'interpréter correctement la réponse du modèle.',
+        sources: bundle.sources
+      };
     }));
   }
 }

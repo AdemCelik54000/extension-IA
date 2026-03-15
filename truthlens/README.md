@@ -84,4 +84,4 @@ Pour le déploiement en production :
 ## Technologies Utilisées
 
 - Frontend : Extension Chrome Manifest V3, JavaScript
-- Backend : Node.js, Express, API OpenAI, APIs Google
+- Backend : Node.js, Express, API Mistral, APIs Brave
