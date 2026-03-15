@@ -263,7 +263,12 @@ function sanitizeClaimCandidate(value) {
     .replace(/^\(\d+\)\s*/, '')
     .replace(/^[^:]{0,80}\bon x\s*:\s*/i, '')
     .replace(/^[^:]{0,80}\bsur x\s*:\s*/i, '')
+    .replace(/^[@a-z0-9_\-\.]+\s*\|\s*[^\d]{0,40}\|\s*[@a-z0-9_\-\.]+\s*/i, '')
+    .replace(/^[@a-z0-9_\-\.]+\s*\|\s*[^\d]{0,40}\s*/i, '')
+    .replace(/^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d{3})?z\s*/i, '')
     .replace(/^actu\s+[a-z0-9_\-]+\s*/i, '')
+    .replace(/^['"`]+/, '')
+    .replace(/\s+\/\s*x$/i, '')
     .replace(/\s+#\S+/g, ' ')
   );
 }
@@ -308,11 +313,21 @@ function isSocialSnapshot(page) {
 function dedupeClaims(claims) {
   const seen = new Set();
   return claims.filter((claim) => {
-    const normalized = cleanText(claim).toLowerCase();
+    const normalized = normalizeClaimKey(claim);
     if (!normalized || normalized.length < 20 || seen.has(normalized)) return false;
     seen.add(normalized);
     return true;
   });
+}
+
+function normalizeClaimKey(value) {
+  return normalizeForMatch(sanitizeClaimCandidate(value))
+    .replace(/^x\s+/, '')
+    .replace(/^twitter\s+/, '')
+    .replace(/^sur\s+x\s+/, '')
+    .replace(/^[^a-z0-9]+/, '')
+    .replace(/["'`]/g, '')
+    .trim();
 }
 
 function reducePagePayload(page, analysisMode) {
@@ -774,6 +789,11 @@ async function assessClaimsWithMistral(bundles, pageUrl, pageContext, analysisMo
 }
 
 async function compareSelectionWithSources(claim, sources, analysisMode) {
+  const heuristicVerdict = buildStrongSourceHeuristic(claim, sources);
+  if (heuristicVerdict) {
+    return heuristicVerdict;
+  }
+
   const sourceText = sources.length
     ? sources.map((source) => `- ${source.title} (${source.url}): ${source.snippet}`).join('\n')
     : '- Aucune source externe exploitable trouvée.';
@@ -817,6 +837,54 @@ async function compareSelectionWithSources(claim, sources, analysisMode) {
       explanation: 'Les sources disponibles et les connaissances générales disponibles ne permettent pas une conclusion plus nette.'
     };
   }
+}
+
+function buildStrongSourceHeuristic(claim, sources) {
+  if (!Array.isArray(sources) || sources.length === 0) {
+    return null;
+  }
+
+  const normalizedClaim = normalizeForMatch(claim);
+  if (!normalizedClaim || /\b(ne|pas|jamais|aucun|aucune)\b/.test(normalizedClaim)) {
+    return null;
+  }
+
+  const claimTerms = extractSignificantTerms(claim).filter((term) => term.length >= 4);
+  if (claimTerms.length < 3) {
+    return null;
+  }
+
+  const ranked = sources
+    .map((source) => {
+      const combinedText = `${source.title || ''} ${source.snippet || ''}`;
+      const normalizedSource = normalizeForMatch(combinedText);
+      const matchedTerms = claimTerms.filter((term) => normalizedSource.includes(term));
+      const overlap = matchedTerms.length / claimTerms.length;
+      const contradiction = /\b(faux|fake|rumeur|dement|dementi|aucun|aucune|pas de|inexact)\b/.test(normalizedSource);
+      return {
+        source,
+        overlap,
+        matchedTerms,
+        contradiction
+      };
+    })
+    .sort((left, right) => right.overlap - left.overlap);
+
+  const best = ranked[0];
+  if (!best || best.contradiction) {
+    return null;
+  }
+
+  const hasEnoughOverlap = best.overlap >= 0.72 || best.matchedTerms.length >= 5;
+  if (!hasEnoughOverlap) {
+    return null;
+  }
+
+  return {
+    verdict: 'true',
+    credibility_score: Math.min(0.92, Math.max(0.78, best.overlap)),
+    explanation: `Une source fiable concorde clairement avec l'affirmation, notamment ${best.source.title || 'la source principale'}.`
+  };
 }
 
 async function compareSelectionWithGeneralKnowledge(claim, analysisMode) {
