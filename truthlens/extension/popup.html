@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TruthLens</title>
+  <style>
+    body { width: 360px; padding: 12px; font-family: "Segoe UI", sans-serif; color: #1f2937; }
+    h3 { margin: 0 0 12px; }
+    .actions { display: flex; gap: 8px; margin-bottom: 10px; }
+    .mode-row { align-items: center; }
+    button { flex: 1; padding: 10px 12px; cursor: pointer; border: 1px solid #d1d5db; border-radius: 8px; background: #f9fafb; }
+    select { flex: 1; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; background: #ffffff; }
+    button:hover { background: #f3f4f6; }
+    #status { min-height: 20px; margin-bottom: 10px; font-size: 13px; color: #374151; }
+    #results { padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px; max-height: 320px; overflow-y: auto; background: #ffffff; }
+    .result-item { margin-bottom: 12px; padding: 10px; border-left: 4px solid; background: #f9fafb; border-radius: 6px; }
+    .result-item:last-child { margin-bottom: 0; }
+    .true { border-color: #16a34a; }
+    .false { border-color: #dc2626; }
+    .uncertain { border-color: #d97706; }
+    .label { font-weight: 600; }
+    .source-list { margin-top: 8px; }
+    .source-list a { color: #2563eb; text-decoration: none; }
+    .source-list a:hover { text-decoration: underline; }
+    .debug-box { margin-top: 12px; padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f8fafc; }
+    .debug-box h4 { margin: 0 0 8px; font-size: 14px; }
+    .debug-box p { margin: 6px 0; font-size: 13px; }
+    .debug-box ul { margin: 6px 0 0 18px; padding: 0; }
+    .debug-box li { margin: 4px 0; font-size: 13px; }
+    .muted { color: #6b7280; }
+  </style>
+</head>
+<body>
+  <h3>TruthLens</h3>
+  <div class="actions mode-row">
+    <label for="analysisMode" class="label">Mode</label>
+    <select id="analysisMode">
+      <option value="quick">Analyse rapide</option>
+      <option value="deep">Analyse approfondie</option>
+    </select>
+  </div>
+  <div class="actions">
+    <button id="verifyPageBtn">Analyser la page</button>
+    <button id="verifySelectionBtn">Analyser la sélection</button>
+  </div>
+  <div class="actions">
+    <button id="clearCacheBtn">Vider le cache</button>
+  </div>
+  <div id="status"></div>
+  <div id="results"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
