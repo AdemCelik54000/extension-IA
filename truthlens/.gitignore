@@ -1,0 +1,13 @@
+backend/.env
+backend/.env.local
+backend/.env.*
+!backend/.env.example
+
+backend/node_modules/
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+.DS_Store
+Thumbs.db

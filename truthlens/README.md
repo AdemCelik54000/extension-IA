@@ -2,6 +2,12 @@
 
 Une extension de navigateur qui vérifie les informations sur les pages web en utilisant Mistral AI et Brave Search.
 
+## Configuration locale
+
+1. Copiez `backend/.env.example` vers `backend/.env`
+2. Renseignez vos clés API dans `backend/.env`
+3. Gardez `backend/.env` privé : il est ignoré par Git et ne doit jamais être publié
+
 ## Fonctionnalités
 
 ### 1. Vérification de Page Complète
@@ -19,7 +25,7 @@ Une extension de navigateur qui vérifie les informations sur les pages web en u
 ## Technologies Utilisées
 
 - Frontend : Extension Chrome Manifest V3, JavaScript
-- Backend : Node.js, Express, Mistral AI (mistral-large-latest), Brave Search API
+- Backend : Node.js, Express, Mistral AI (mistral-small-latest), Brave Search API
 
 ```bash
 cd backend
@@ -27,7 +33,7 @@ npm install
 npm start
 ```
 
-Le backend tournera sur http://localhost:3000
+Le backend tournera sur http://localhost:3001
 
 ### 3. Configuration de l'Extension
 
@@ -46,7 +52,7 @@ Remplacez les fichiers d'espace réservé dans `extension/icons/` par des icône
 2. Cliquez sur "Scanner la Page"
 3. L'extension extrait le texte de la page actuelle
 4. Envoie le texte au backend pour analyse
-5. Le backend utilise Mistral (mistral-large-latest) pour extraire les affirmations
+5. Le backend utilise Mistral (mistral-small-latest) pour extraire les affirmations
 6. Vérifie les affirmations en utilisant l'API Google Fact Check Tools (si disponible) ou Brave Search
 7. Retourne les résultats à l'extension
 8. L'extension affiche les badges sur la page et un résumé dans la popup

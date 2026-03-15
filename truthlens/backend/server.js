@@ -169,7 +169,7 @@ async function extractClaimsFromPage(page, analysisMode) {
     `${buildPageSummary(page)}`;
 
   const response = await axios.post('https://api.mistral.ai/v1/chat/completions', {
-    model: 'mistral-large-latest',
+    model: 'mistral-small-latest',
     messages: [{ role: 'user', content: prompt }],
     max_tokens: analysisMode === 'deep' ? 320 : 180,
   }, {
@@ -561,7 +561,7 @@ async function assessClaimsWithMistral(bundles, pageUrl, pageContext, analysisMo
     `Répondez avec le JSON uniquement, sans texte autour.`;
 
   const response = await axios.post('https://api.mistral.ai/v1/chat/completions', {
-    model: 'mistral-large-latest',
+    model: 'mistral-small-latest',
     messages: [{ role: 'user', content: prompt }],
     max_tokens: analysisMode === 'deep' ? 650 : 420,
   }, {
@@ -614,7 +614,7 @@ async function compareSelectionWithSources(claim, sources, analysisMode) {
     `Sources:\n${sourceText}`;
 
   const response = await axios.post('https://api.mistral.ai/v1/chat/completions', {
-    model: 'mistral-large-latest',
+    model: 'mistral-small-latest',
     messages: [{ role: 'user', content: prompt }],
     max_tokens: analysisMode === 'deep' ? 140 : 90,
   }, {
@@ -653,7 +653,7 @@ async function compareSelectionWithGeneralKnowledge(claim, analysisMode) {
     `Affirmation: "${claim}"`;
 
   const response = await axios.post('https://api.mistral.ai/v1/chat/completions', {
-    model: 'mistral-large-latest',
+    model: 'mistral-small-latest',
     messages: [{ role: 'user', content: prompt }],
     max_tokens: analysisMode === 'deep' ? 140 : 90,
   }, {
