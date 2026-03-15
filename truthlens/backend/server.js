@@ -754,16 +754,41 @@ async function assessClaimsWithMistral(bundles, pageUrl, pageContext, analysisMo
   try {
     const parsed = parseModelJson(output);
     const parsedArray = Array.isArray(parsed) ? parsed : [];
-    return bundles.map((bundle) => {
-      const match = parsedArray.find((item) => cleanText(item?.claim).toLowerCase() === cleanText(bundle.claim).toLowerCase());
+    return Promise.all(bundles.map(async (bundle) => {
+      const match = parsedArray.find((item) => normalizeClaimKey(item?.claim) === normalizeClaimKey(bundle.claim));
+      const matchedSources = Array.isArray(match?.sources) && match.sources.length ? match.sources : bundle.sources;
+      const matchedVerdict = ['true', 'false', 'uncertain'].includes(match?.verdict) ? match.verdict : 'uncertain';
+      const matchedExplanation = cleanText(match?.explanation);
+
+      if ((matchedVerdict === 'true' || matchedVerdict === 'false') && matchedExplanation) {
+        return {
+          claim: bundle.claim,
+          verdict: matchedVerdict,
+          credibility_score: typeof match?.credibility_score === 'number' ? match.credibility_score : 0.5,
+          explanation: matchedExplanation,
+          sources: matchedSources
+        };
+      }
+
+      const sourceVerdict = await compareSelectionWithSources(bundle.claim, matchedSources, analysisMode);
+      if (sourceVerdict && ['true', 'false'].includes(sourceVerdict.verdict)) {
+        return {
+          claim: bundle.claim,
+          verdict: sourceVerdict.verdict,
+          credibility_score: typeof sourceVerdict.credibility_score === 'number' ? sourceVerdict.credibility_score : 0.5,
+          explanation: sourceVerdict.explanation || matchedExplanation || 'Une source fiable permet une conclusion nette.',
+          sources: matchedSources
+        };
+      }
+
       return {
         claim: bundle.claim,
-        verdict: match?.verdict || 'uncertain',
+        verdict: matchedVerdict,
         credibility_score: typeof match?.credibility_score === 'number' ? match.credibility_score : 0.5,
-        explanation: match?.explanation || '',
-        sources: Array.isArray(match?.sources) && match.sources.length ? match.sources : bundle.sources
+        explanation: matchedExplanation || sourceVerdict?.explanation || 'Les sources disponibles et les connaissances générales disponibles ne permettent pas une conclusion plus nette.',
+        sources: matchedSources
       };
-    });
+    }));
   } catch (error) {
     console.error('Failed to parse Mistral verdict:', output);
     return Promise.all(bundles.map(async (bundle) => {
